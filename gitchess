@@ -1,0 +1,876 @@
+#!/bin/bash
+
+grid=(
+'row=(rook knight bishop king queen bishop knight rook)'
+'row=(pawn pawn pawn pawn pawn pawn pawn pawn)'
+'row=(blank blank blank blank blank blank blank blank)'
+'row=(blank blank blank blank blank blank blank blank)'
+'row=(blank blank blank blank blank blank blank blank)'
+'row=(blank blank blank blank blank blank blank blank)'
+'row=(PAWN PAWN PAWN PAWN PAWN PAWN PAWN PAWN)'
+'row=(ROOK KNIGHT BISHOP QUEEN KING BISHOP KNIGHT ROOK)'
+)
+
+blackDown=1
+function flipBoard {
+  i=7
+  newGrid=()
+  for j in {0..7}; do
+    newRow=()
+    k=7
+    eval ${grid[j]}
+    for w in {0..7}; do
+      newRow[$k]=${row[w]}
+      k=`expr $k - 1`
+    done
+
+    newGrid[$i]='row=('${newRow[@]}')'
+    i=`expr $i - 1`
+  done
+  for j in {0..7}; do
+    grid[$j]=${newGrid[j]}
+  done
+  if [ "$blackDown" = "1" ]; then
+    blackDown=0
+  else
+    blackDown=1
+  fi
+}
+
+function getPiece {
+  if [ "$1" = "king" ]; then
+    piece=`echo -e "\xE2\x99\x94"`
+  elif [ "$1" = "queen" ]; then
+    piece=`echo -e "\xE2\x99\x95"`
+  elif [ "$1" = "rook" ]; then
+    piece=`echo -e "\xE2\x99\x96"`
+  elif [ "$1" = "bishop" ]; then
+    piece=`echo -e "\xE2\x99\x97"`
+  elif [ "$1" = "knight" ]; then
+    piece=`echo -e "\xE2\x99\x98"`
+  elif [ "$1" = "pawn" ]; then
+    piece=`echo -e "\xE2\x99\x99"`
+  elif [ "$1" = "KING" ]; then
+    piece=`echo -e "\xE2\x99\x9A"`
+  elif [ "$1" = "QUEEN" ]; then
+    piece=`echo -e "\xE2\x99\x9B"`
+  elif [ "$1" = "ROOK" ]; then
+    piece=`echo -e "\xE2\x99\x9C"`
+  elif [ "$1" = "BISHOP" ]; then
+    piece=`echo -e "\xE2\x99\x9D"`
+  elif [ "$1" = "KNIGHT" ]; then
+    piece=`echo -e "\xE2\x99\x9E"`
+  elif [ "$1" = "PAWN" ]; then
+    piece=`echo -e "\xE2\x99\x9F"`
+  else
+    piece=" "
+  fi
+}
+
+function getFile {
+  if [ "$1" = "a" ]; then file=0; elif [ "$1" = "b" ]; then file=1; elif [ "$1" = "c" ]; then file=2
+  elif [ "$1" = "d" ]; then file=3; elif [ "$1" = "e" ]; then file=4; elif [ "$1" = "f" ]; then file=5
+  elif [ "$1" = "g" ]; then file=6; elif [ "$1" = "h" ]; then file=7; else file="error"; fi
+}
+
+function invalidMove {
+  move="invalid"
+  explanation="$1"
+}
+
+horiz="  -----------------------------------------"
+alpha="    A    B    C    D    E    F    G    H"
+function drawBoard {
+  if [ -z "$1" ]; then
+    clear
+  fi
+  echo "$alpha"
+  echo "$horiz"
+  for i in {0..7}; do
+    eval ${grid[i]}
+    echo -n `expr $i + 1`" "
+    for j in {0..7}; do
+      getPiece ${row[j]}
+
+      echo -n "| "$piece"  "
+      if [ "$j" = "7" ]; then
+        echo -n "|"
+      fi
+    done
+    echo -n " "`expr $i + 1`
+
+    echo
+    echo "$horiz"
+  done
+  echo "$alpha"
+}
+
+function getMove {
+  while [ -z "$move" ]; do
+    drawBoard
+    if [[ ! -z "$explanation" ]]; then
+      echo "$explanation"
+      echo
+    fi
+    if [[ ! -z "$commitMessageYours" ]]; then
+      echo "$commitMessageYours"
+      echo
+      commitMessageYours=''
+    fi
+    if [[ "$inCheck" = "1" ]]; then
+      echo "You are in check. Your next move must get you out of check.
+If you cannot get out of check, simply type \"!\" to signify a Checkmate."
+    fi
+    echo -n "Your move: "
+    read input
+    move=`echo "$input" | grep -oE "(^[a-h][1-8]\s*[a-h][1-8]$|^\!$)"`
+    move=`echo $move | sed 's/\s*//g'`
+    if [ ! "$move" ]; then
+      explanation="Invalid move syntax"
+    fi
+  done
+}
+
+function movePiece {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4; swapForQueen=$5
+
+  # insert blank where src once was
+  eval ${grid[srcRow]}
+  src=${row[srcFile]}
+  row[$srcFile]="blank"
+  list=`echo ${row[@]}`
+  grid[$srcRow]='row=('$list')'
+
+  # replace target with src
+  eval ${grid[targetRow]}
+  target=${row[targetFile]}
+  if [ $swapForQueen = "1" ]; then
+    srcBlack=`echo "$src" | grep -Eo "[A-Z]"`
+    if ! [ -z "$srcBlack" ]; then
+      row[$targetFile]="QUEEN"
+    else
+      # white queen
+      row[$targetFile]="queen"
+    fi
+  else
+    row[$targetFile]=$src
+  fi
+  list=`echo ${row[@]}`
+  grid[$targetRow]='row=('$list')'
+
+  src=`echo $src | tr [a-z] [A-Z]`
+  target=`echo $target | tr [a-z] [A-Z]`
+  if [ $captureAttempt != 0 ]; then
+    captureMessage="Opponent's $target captured!"
+    commitMessage="$me's $src captured $opponent's $target!"
+    commitMessageYours="$me's $src captured your $target!"
+  else
+    captureMessage=""
+    commitMessage="$me moved a $src"
+    commitMessageYours="$me moved a $src"
+  fi
+
+  if [ $swapKingAndRook = "1" ]; then
+    swapKingAndRook="0"
+    movePiece "7" "7" "5" "7" "0"
+  fi
+}
+
+function checkVerticalPath {
+  # assume srcFile = targetFile
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  rowDiff=`expr $targetRow - $srcRow`
+  if [ "$rowDiff" -gt "0" ]; then
+    i=1
+    while [[ "$i" -lt $rowDiff ]]; do
+      rowIdx=`expr $srcRow + $i`
+
+      eval ${grid[rowIdx]}
+      piece=${row[srcFile]}
+
+      if [ "$piece" != "blank" ]; then
+        file=`echo $srcFile | tr 01234567 abcdefgh`
+        row=`echo $rowIdx | tr 01234567 12345678`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$rowDiff
+      fi
+
+      i=`expr $i + 1`
+    done
+  else
+    i="-1"
+    while [[ "$i" -gt $rowDiff ]]; do
+      rowIdx=`expr $srcRow + $i`
+
+      eval ${grid[rowIdx]}
+      piece=${row[srcFile]}
+
+      if [ "$piece" != "blank" ]; then
+        file=`echo $srcFile | tr 01234567 abcdefgh`
+        row=`echo $rowIdx | tr 01234567 12345678`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$rowDiff
+      fi
+
+      i=`expr $i - 1`
+    done
+  fi
+}
+
+function checkHorizontalPath {
+  # assume srcRow = targetRow
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  fileDiff=`expr $targetFile - $srcFile`
+  if [ "$fileDiff" -gt "0" ]; then
+    i=1
+    while [[ "$i" -lt $fileDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+
+      eval ${grid[srcRow]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $srcRow | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i + 1`
+    done
+  else
+    i="-1"
+    while [[ "$i" -gt $fileDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+
+      eval ${grid[srcRow]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $srcRow | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i - 1`
+    done
+  fi
+}
+
+function checkDiagonalPath {
+  # assume srcRow = targetRow
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  fileDiff=`expr $targetFile - $srcFile`
+  rowDiff=`expr $targetRow - $srcRow`
+
+  if [[ "$fileDiff" -gt "0" && "$rowDiff" -gt "0" ]]; then
+    i=1
+    j=1
+    while [[ "$i" -lt $fileDiff && "$j" -lt $rowDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+      rowIdx=`expr $srcRow + $j`
+
+      eval ${grid[rowIdx]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $rowIdx | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i + 1`
+      j=`expr $j + 1`
+    done
+  elif [[ "$fileDiff" -gt "0" && "$rowDiff" -le "0" ]]; then
+    i=1
+    j="-1"
+    while [[ "$i" -lt $fileDiff && "$j" -gt $rowDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+      rowIdx=`expr $srcRow + $j`
+
+      eval ${grid[rowIdx]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $rowIdx | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i + 1`
+      j=`expr $j - 1`
+    done
+  elif [[ "$fileDiff" -le "0" && "$rowDiff" -gt "0" ]]; then
+    i="-1"
+    j=1
+    while [[ "$i" -gt $fileDiff && "$j" -lt $rowDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+      rowIdx=`expr $srcRow + $j`
+
+      eval ${grid[rowIdx]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $rowIdx | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i - 1`
+      j=`expr $j + 1`
+    done
+  else
+    # "$fileDiff" -le "0" && "$rowDiff" -le "0"
+    i="-1"
+    j="-1"
+    while [[ "$i" -gt $fileDiff && "$j" -gt $rowDiff ]]; do
+      fileIdx=`expr $srcFile + $i`
+      rowIdx=`expr $srcRow + $j`
+
+      eval ${grid[rowIdx]}
+      piece=${row[fileIdx]}
+
+      if [ "$piece" != "blank" ]; then
+        row=`echo $rowIdx | tr 01234567 12345678`
+        file=`echo $fileIdx | tr 01234567 abcdefgh`
+        invalidMove "There is a piece in between those two points: $piece $file$row"
+        # break
+        i=$fileDiff
+      fi
+
+      i=`expr $i - 1`
+      j=`expr $j - 1`
+    done
+  fi
+}
+
+function movePawn {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  rowDiff=`expr $targetRow - $srcRow`
+  rowChange="-1"
+  fileDiff=`expr $targetFile - $srcFile`
+  fileDiff=`echo ${fileDiff#-}`
+  fileChange="0"
+
+  if [ "$srcRow" = "6" ]; then
+    # double move allowed
+    rowChange="-2"
+    # if we're moving 2 spaces forward
+    # make sure there's nothing in between
+    between=`expr $srcRow - 1`
+    eval ${grid[between]}
+    between=${row[srcFile]}
+  else
+    between="blank"
+  fi
+  if [ "$captureAttempt" = "1" ]; then
+    fileChange="1"
+    rowChange="-1"
+  fi
+
+  if [[ "$rowDiff" -lt "$rowChange" || $rowDiff = "0" || "$fileDiff" != "$fileChange" || "$between" != "blank" ]]; then
+    invalidMove "Pawn can't move that way"
+  fi
+}
+
+function moveKnight {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  prevFile=`expr $srcFile - 1`
+  nextFile=`expr $srcFile + 1`
+  prevRow=`expr $srcRow - 1`
+  nextRow=`expr $srcRow + 1`
+
+  jumpPrevFile=`expr $srcFile - 2`
+  jumpNextFile=`expr $srcFile + 2`
+  jumpPrevRow=`expr $srcRow - 2`
+  jumpNextRow=`expr $srcRow + 2`
+
+  if [[ $targetFile = $prevFile && $targetRow = $jumpPrevRow ||
+    $targetFile = $nextFile && $targetRow = $jumpPrevRow ||
+    $targetFile = $jumpNextFile && $targetRow = $prevRow ||
+    $targetFile = $jumpNextFile && $targetRow = $nextRow ||
+    $targetFile = $prevFile && $targetRow = $jumpNextRow ||
+    $targetFile = $nextFile && $targetRow = $jumpNextRow ||
+    $targetFile = $jumpPrevFile && $targetRow = $prevRow ||
+    $targetFile = $jumpPrevFile && $targetRow = $nextRow ]]; then
+
+    echo -n ''
+    # valid move
+
+    # check player's own piece is not in target space
+  else
+    # If move not in set of possible moves
+    invalidMove "Knight can't move that way"
+  fi
+}
+
+function rookReady {
+  color=$1
+
+  eval ${grid[7]}
+  rightOfKing=${row[5]}
+  eval ${grid[7]}
+  leftOfRook=${row[6]}
+  if [[ $rightOfKing = "blank" && $leftOfRook = "blank" ]]; then
+    emptySpaceBetween="1"
+  else
+    emptySpaceBetween="0"
+  fi
+
+  eval ${grid[7]}
+  if [[ "$emptySpaceBetween" = 1 && ${row[7]} = "ROOK" && "$color" = "black" || "$emptySpaceBetween" = "1" && ${row[7]} = "rook" && "$color" = "white" ]]; then
+    rookReady="1"
+  else
+    rookReady="0"
+  fi
+}
+
+function moveKing {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4; color=$5
+
+  rookReady $color
+
+  if [[ $srcRow != "7" || $targetRow != "7" || $srcFile != "4" || $targetFile != "6" || $rookReady != "1" ]]; then
+    rowDiff=`expr $targetRow - $srcRow`
+    rowDiff=`echo ${rowDiff#-}`
+    fileDiff=`expr $targetFile - $srcFile`
+    fileDiff=`echo ${fileDiff#-}`
+
+    if [[ "$rowDiff" -gt "1" || $fileDiff -gt "1" ]]; then
+      invalidMove "King can't move that way"
+    fi
+  else
+    swapKingAndRook="1"
+  fi
+}
+
+function moveRook {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  rowDiff=`expr $targetRow - $srcRow`
+  rowDiff=`echo ${rowDiff#-}`
+  fileDiff=`expr $targetFile - $srcFile`
+  fileDiff=`echo ${fileDiff#-}`
+
+  if [[ ( "$rowDiff" -gt "0" && "$fileDiff" -gt "0" ) || ( "$rowDiff" = "0" && "$fileDiff" = "0" ) ]]; then
+    invalidMove "Rook can't move that way"
+  elif [ "$fileDiff" = "0" ]; then
+    checkVerticalPath $srcFile $srcRow $targetFile $targetRow
+  else
+    checkHorizontalPath $srcFile $srcRow $targetFile $targetRow
+  fi
+}
+
+function moveBishop {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  rowDiff=`expr $targetRow - $srcRow`
+  rowDiff=`echo ${rowDiff#-}`
+  fileDiff=`expr $targetFile - $srcFile`
+  fileDiff=`echo ${fileDiff#-}`
+
+  if [[ ( $rowDiff != $fileDiff ) || ( $rowDiff = 0 && $fileDiff = 0 ) ]]; then
+    invalidMove "Bishop can't move that way"
+  else
+    checkDiagonalPath $srcFile $srcRow $targetFile $targetRow
+  fi
+}
+
+function moveQueen {
+  srcFile=$1; srcRow=$2; targetFile=$3; targetRow=$4
+
+  rowDiff=`expr $targetRow - $srcRow`
+  rowDiff=`echo ${rowDiff#-}`
+  fileDiff=`expr $targetFile - $srcFile`
+  fileDiff=`echo ${fileDiff#-}`
+
+  # combination of rook and bishop
+  if [[ $rowDiff -gt 0 && $fileDiff -gt 0 ]]; then
+    if [[ ( $rowDiff != $fileDiff ) ]]; then
+      invalidMove "Queen can't move that way"
+    else
+      checkDiagonalPath $srcFile $srcRow $targetFile $targetRow
+    fi
+  else
+    if [ $fileDiff = "0" ]; then
+      checkVerticalPath $srcFile $srcRow $targetFile $targetRow
+    else
+      checkHorizontalPath $srcFile $srcRow $targetFile $targetRow
+    fi
+  fi
+}
+
+inCheck=0
+kingRow=""
+kingFile=""
+function checkState {
+  # iterate through all enemy chessPieces
+  # and check that they cannot kill my king
+  # if any one of them can - I'm in check
+  inCheck=0
+  color=$1
+
+  flipBoard
+
+  for i in {0..7}; do
+    eval ${grid[i]}
+    for j in {0..7}; do
+      chessPiece=${row[j]}
+      if [[ "$color" = "white" && "$chessPiece" = "king" || "$color" = "black" && "$chessPiece" = "KING" ]]; then
+        kingRow=$i
+        kingFile=$j
+      fi
+    done
+  done
+
+  for y in {0..7}; do
+    eval ${grid[y]}
+    for x in {0..7}; do
+      chessPiece=${row[x]}
+
+      # get chessPiece color
+      chessPieceColor=`echo "$chessPiece" | grep -Eo "[A-Z]"`
+      if [[ -z "$chessPieceColor" ]]; then
+        chessPieceColor="white"
+      elif [[ "$chessPiece" != 'blank' ]]; then
+        chessPieceColor="black"
+      fi
+
+      move=''
+      # only check colors that match current opponent's color
+      if [[ "$chessPieceColor" != "$color" && "$chessPiece" != 'blank' ]]; then
+        if [[ "$chessPiece" = "blank" ]]; then
+          echo "WTF?????"
+        fi
+        if [[ "$chessPiece" = "pawn" || "$chessPiece" = "PAWN" ]]; then
+          movePawn $x $y $kingFile $kingRow
+        elif [[ "$chessPiece" = "rook" || "$chessPiece" = "ROOK" ]]; then
+          moveRook $x $y $kingFile $kingRow
+        elif [[ "$chessPiece" = "knight" || "$chessPiece" = "KNIGHT" ]]; then
+          moveKnight $x $y $kingFile $kingRow
+        elif [[ "$chessPiece" = "bishop" || "$chessPiece" = "BISHOP" ]]; then
+          moveBishop $x $y $kingFile $kingRow
+        elif [[ "$chessPiece" = "queen" || "$chessPiece" = "QUEEN" ]]; then
+          moveQueen $x $y $kingFile $kingRow
+        elif [[ "$chessPiece" = "king" || "$chessPiece" = "KING" ]]; then
+          moveKing $x $y $kingFile $kingRow $color
+        fi
+        if [ "$move" != "invalid" ]; then
+          inCheck=1
+        fi
+      fi
+    done
+  done
+  explanation=''
+
+  flipBoard
+}
+
+function performMove {
+  move=$1
+  color=$2
+  swapKingAndRook="0"
+  empty=0
+
+  backupMove=$move
+  checkState $color
+  move=$backupMove
+
+  backupBoard=()
+  for j in {0..7}; do
+    backupBoard[$j]=${grid[j]}
+  done
+
+  wasInCheck=$inCheck
+
+  src=`echo ${move:0:2}`
+  srcRow=`echo "$src" | grep -Eo "[1-8]"`
+  srcRow=`expr $srcRow - 1`
+  srcFile=`echo "$src" | grep -Eo "[a-h]"`
+  getFile $srcFile
+  srcFile=$file
+
+  target=`echo ${move:2:4}`
+  targetRow=`echo "$target" | grep -Eo "[1-8]"`
+  targetRow=`expr $targetRow - 1`
+  targetFile=`echo "$target" | grep -Eo "[a-h]"`
+  getFile $targetFile
+  targetFile=$file
+
+  if [ "$file" = "error" ]; then
+    invalidMove "Cannot parse out file"
+  else
+    eval ${grid[srcRow]}
+    piece=${row[srcFile]}
+    pieceColor=`echo "$piece" | grep -Eo "[A-Z]"`
+    if [[ -z "$pieceColor" && "$piece" != "blank" ]]; then
+      pieceColor="white"
+    elif [ "$piece" != "blank" ]; then
+      pieceColor="black"
+      lastMovedPiece=$piece
+    fi
+
+    eval ${grid[targetRow]}
+    targetPiece=${row[targetFile]}
+    targetPieceColor=`echo "$targetPiece" | grep -Eo "[A-Z]"`
+    if [[ -z "$targetPieceColor" && "$targetPiece" != "blank" ]]; then
+      targetPieceColor="white"
+    elif [ "$targetPiece" != "blank" ]; then
+      targetPieceColor="black"
+    fi
+    if [[ "$targetPiece" != "blank" && "$targetPieceColor" != "$color" ]]; then
+      captureAttempt=1
+    else
+      captureAttempt=0
+    fi
+
+    swapForQueen="0"
+    if [ "$piece" = "blank" ]; then
+      invalidMove "There's no piece there"
+    elif [ "$pieceColor" != "$color" ]; then
+      invalidMove "That's not your piece"
+    elif [ "$targetPieceColor" = "$color" ]; then
+      invalidMove "You can't capture your own piece"
+    elif [[ "$piece" = "PAWN" || "$piece" = "pawn" ]]; then
+      movePawn $srcFile $srcRow $targetFile $targetRow
+      if [[ $move != "invalid" && $targetRow = "0" ]]; then
+        # Queen swap
+        swapForQueen="1"
+      fi
+    elif [[ "$piece" = "ROOK" || "$piece" = "rook" ]]; then
+      moveRook $srcFile $srcRow $targetFile $targetRow
+    elif [[ "$piece" = "KNIGHT" || "$piece" = "knight" ]]; then
+      moveKnight $srcFile $srcRow $targetFile $targetRow
+    elif [[ "$piece" = "BISHOP" || "$piece" = "bishop" ]]; then
+      moveBishop $srcFile $srcRow $targetFile $targetRow
+    elif [[ "$piece" = "KING" || "$piece" = "king" ]]; then
+      moveKing $srcFile $srcRow $targetFile $targetRow $color
+    elif [[ "$piece" = "QUEEN" || "$piece" = "queen" ]]; then
+      moveQueen $srcFile $srcRow $targetFile $targetRow
+    fi
+
+    if [ "$move" != "invalid" ]; then
+      movePiece $srcFile $srcRow $targetFile $targetRow $swapForQueen
+      explanation=""
+
+      backupMove=$move
+      checkState $color
+      move=$backupMove
+      if [ "$inCheck" = "1" ]; then
+        grid=()
+        for j in {0..7}; do
+          grid[$j]=${backupBoard[j]}
+        done
+        invalidMove "That puts you in check."
+        inCheck=$wasInCheck
+      fi
+    fi
+  fi
+}
+
+function badLogfileSyntax {
+  echo
+  echo "There was an error processing the git log."
+  echo
+  exit
+}
+
+function loadGame {
+  # flipBoard before we start if white took first turn
+  myLine=`echo "$firstLine" | grep "$me"`
+  opponentLine=`echo "$firstLine" | grep "$opponent"`
+  if [[ ! -z "$myLine" && "$myColor" = "white" || ! -z "$opponentLine" && "$opponentColor" = "white" ]]; then
+    flipBoard
+  fi
+
+  # start reading in logfile and perform moves
+  while read line; do
+    if ! [ -z "$line" ]; then
+      myLine=`echo "$line" | grep "$me"`
+      opponentLine=`echo "$line" | grep "$opponent"`
+      if ! [ -z "$myLine" ]; then
+        move=`echo "$line" | cut -d, -f3`
+        if [[ "$move" = '!' ]]; then
+          drawBoard
+          checkMate $opponent
+        elif [[ "$move" = "RESET" ]]; then
+          : # noop
+        else
+          performMove "$move" "$myColor"
+          if [ "$move" = "invalid" ]; then
+            badLogfileSyntax
+          else
+            flipBoard
+          fi
+        fi
+      elif ! [ -z "$opponentLine" ]; then
+        move=`echo "$line" | cut -d, -f3`
+        if [[ "$move" = '!' ]]; then
+          drawBoard
+          checkMate
+        elif [[ "$move" = "RESET" ]]; then
+          : # noop
+        else
+          performMove "$move" "$opponentColor"
+          if [ "$move" = "invalid" ]; then
+            badLogfileSyntax
+          else
+            flipBoard
+          fi
+        fi
+      else
+        badLogfileSyntax
+      fi
+      lastMove=$move
+      move=""
+    fi
+  done < <(echo "$log")
+
+  # if the last line is a log of your move
+  # then it's your opponent's turn and we have to wait
+  lastLine=`echo "$lastLine" | grep "$me"`
+  if [[ ! -z "$lastLine" && "$lastMove" != "RESET" ]]; then
+    echo
+    echo -n "Looks like it's not your turn. "
+    # Call gitwar to wait for opponent
+    ./gitwar -w
+    log=`./gitwar -l`
+    echo
+
+    move=`echo "$log" | tail -1 | cut -d, -f3`
+    # Don't need to flipboard before the move because we already
+    # flipped after we processed our last move
+    color=$opponentColor
+    performMove "$move" "$opponentColor"
+    flipBoard
+    move=""
+  fi
+}
+
+function visLog {
+  board=`drawBoard "noclear"`
+  oldLog=`tail -n +20 "$logfile"`
+  echo "$board
+`date "+%b %d %Y"`: $1
+$oldLog" > "$logfile"
+}
+
+function giveUp {
+  echo
+  echo "GIVE UP!"
+  echo
+  echo "Sending data..."
+
+  ./gitwar -s "$me gave up!
+
+!"
+
+  exit
+}
+
+function checkMate {
+  echo
+  if [ -z "$1" ]; then
+    echo "CHECKMATE! You win!"
+  else
+    echo "CHECKMATE! $1 wins!"
+  fi
+  echo
+  exit
+}
+
+# Initialize some gitwar stuff
+logfile="gitwar.log"
+me=`git config "user.name"`
+users1=`head -1 gitwar.users`
+users2=`tail -1 gitwar.users`
+
+# Check that the user can play and get the opponent's score
+user1=`echo $users1 | cut -d":" -f1`
+user2=`echo $users2 | cut -d":" -f1`
+if [ "$me" = "$user1" ]; then
+  opponent="$user2"
+  myColor=`echo $users1 | cut -d":" -f2 | sed "s/\s//g"`
+  opponentColor=`echo $users2 | cut -d":" -f2 | sed "s/\s//g"`
+elif [ "$me" = "$user2" ]; then
+  opponent="$user1"
+  myColor=`echo $users2 | cut -d":" -f2 | sed "s/\s//g"`
+  opponentColor=`echo $users1 | cut -d":" -f2 | sed "s/\s//g"`
+else
+  echo "You are not a player in this game. Check your git config for your 'user.name' setting. It should match one of the names in the gitwar.users file"
+  echo
+  exit
+fi
+
+# Actual game stuff
+drawBoard
+echo -n "Loading game..."
+./gitwar -p
+githead=`tail -1 gitwar.games`
+logformat="%cd,%cn,%b"
+log=`./gitwar -l`
+firstLine=`./gitwar -l -head`
+lastLine=`./gitwar -l -tail`
+loadGame
+if [[ "$blackDown" = "1" && "$myColor" = "white" ]]; then
+  flipBoard
+fi
+echo
+
+# Game loop
+while [[ -z "$move" || "$move" = "invalid" ]]; do
+  move=""
+  getMove
+  if [[ "$move" = '!' ]]; then
+    giveUp
+  else
+    commitMove=$move
+    performMove "$move" "$myColor"
+
+    # how do we continue if the move finished
+    # if move = "invalid" we go back to the loop and
+    # prompt the user for a different move
+    if [ "$move" != "invalid" ]; then
+      explanation=""
+      drawBoard
+      if ! [ -z "$captureMessage" ]; then
+        echo $captureMessage; echo
+      fi
+
+      # submit and wait
+      visLog $commitMessage
+
+      ./gitwar "$commitMessage" "$commitMove"
+      log=`./gitwar -l`
+
+      # Just got a move from our opponent
+      move=`echo "$log" | tail -1 | cut -d, -f3`
+      if [[ "$move" = '!' ]]; then
+        checkMate
+      else
+        flipBoard
+        color=$opponentColor
+        performMove "$move" "$opponentColor"
+        flipBoard
+        move=""
+      fi
+    fi
+  fi
+done
